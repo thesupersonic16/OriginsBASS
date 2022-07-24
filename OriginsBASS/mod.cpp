@@ -129,45 +129,83 @@ struct DataArray_t final
 		intptr_t addr;
 };
 
-struct TrackInfo {
-	char fileName[0x40];
-	bool trackLoop;
-	unsigned int loopPoint;
-};
-
 ModLoader* ModLoaderData;
 const char** ModPaths;
 int ModPathCount;
 int basschan = 0;
-int currentTrack;
-DataArray(TrackInfo, musicTracks, ReadDataPointer((size_t)SigPlayMusic(), 0x0A, 0x07) + 0x07, 16);
+char currentmusic[MAX_PATH];
+__int64 loopPoint;
+bool isfast = false;
 
-HOOK(void, __fastcall, StopMusic, (char*)SigStopMusic() + 1)
+HOOK(void, __fastcall, StopMusic, ReadDataPointer((size_t)SigS3KSetup() + 0x899, 3, 7), __int64 channel)
 {
 	if (basschan != 0)
 	{
 		BASS_ChannelStop(basschan);
 		BASS_ChannelFree(basschan);
 		basschan = 0;
+		currentmusic[0] = 0;
 	}
 	else
-		originalStopMusic();
+		originalStopMusic(channel);
 }
 
 static void __stdcall LoopTrack(HSYNC handle, DWORD channel, DWORD data, void* user)
 {
-	BASS_ChannelSetPosition(channel, musicTracks[currentTrack].loopPoint * 4, BASS_POS_BYTE);
+	BASS_ChannelSetPosition(channel, loopPoint, BASS_POS_BYTE);
 }
 
-HOOK(bool, __fastcall, PlayMusic, SigPlayMusic(), int trackID)
+HOOK(__int64, __fastcall, PlayMusic, SigPlayMusic(), const char *name, __int64 channel, __int64 startpos, unsigned int looppos, int async)
 {
-	if (!musicTracks[trackID].fileName[0])
-		return false;
-	implOfStopMusic();
-	currentTrack = trackID;
+	if (!name[0])
+		return -1;
+
+	bool speedup = false;
+	const char* _name = name;
+	char origname[MAX_PATH];
+	const char* tmp = strstr(name, "_F.ogg");
+	if (tmp)
+	{
+		strcpy(origname, name);
+		strcpy(origname + (tmp - name), ".ogg");
+		speedup = true;
+		_name = origname;
+	}
+	else
+	{
+		tmp = strstr(name, "/F/");
+		if (tmp)
+		{
+			strcpy(origname, name);
+			strcpy(origname + (tmp - name), tmp + 2);
+			speedup = true;
+			_name = origname;
+		}
+	}
+
+	if (!strcmp(currentmusic, _name))
+	{
+		if (speedup)
+		{
+			BASS_ChannelSetAttribute(basschan, BASS_ATTRIB_TEMPO, 25);
+			isfast = true;
+			return -1;
+		}
+		else if (isfast)
+		{
+			BASS_ChannelSetAttribute(basschan, BASS_ATTRIB_TEMPO, 0);
+			isfast = false;
+			return -1;
+		}
+	}
+
+	implOfStopMusic(channel);
+	
 	char fnbase[MAX_PATH];
-	snprintf(fnbase, MAX_PATH, "%s\\Data\\Music\\%s", ModLoaderData->GetDataPackName(), musicTracks[trackID].fileName);
+	snprintf(fnbase, MAX_PATH, "%s\\Data\\Music\\%s", ModLoaderData->GetDataPackName(), _name);
 	PathRemoveExtensionA(fnbase);
+	for (tmp = strchr(fnbase, '/'); tmp; tmp = strchr(tmp, '/'))
+		*(char*)tmp = '\\';
 	for (int i = 0; i < ModPathCount; i++)
 	{
 		bool found = false;
@@ -184,6 +222,9 @@ HOOK(bool, __fastcall, PlayMusic, SigPlayMusic(), int trackID)
 		}
 		if (found)
 		{
+			strcpy(currentmusic, _name);
+			loopPoint = looppos;
+			isfast = speedup;
 			char loopfn[MAX_PATH];
 			strncpy(loopfn, fn2, MAX_PATH);
 			PathRemoveFileSpecA(loopfn);
@@ -191,10 +232,9 @@ HOOK(bool, __fastcall, PlayMusic, SigPlayMusic(), int trackID)
 			if (FileExists(loopfn))
 			{
 				IniFile ini(loopfn);
-				musicTracks[trackID].loopPoint = ini.getInt("", PathFindFileNameA(fnbase), musicTracks[trackID].loopPoint);
+				loopPoint = ini.getInt("", PathFindFileNameA(fnbase), loopPoint);
 			}
-			bool useloop = false;
-			useloop = musicTracks[trackID].trackLoop;
+			bool useloop = loopPoint != 0;
 			basschan = BASS_StreamCreateFile(false, fn2, 0, 0, BASS_STREAM_DECODE);
 
 			if (basschan != 0)
@@ -203,29 +243,21 @@ HOOK(bool, __fastcall, PlayMusic, SigPlayMusic(), int trackID)
 				if (useloop)
 					BASS_ChannelSetSync(basschan, BASS_SYNC_END | BASS_SYNC_MIXTIME, 0, LoopTrack, nullptr);
 				BASS_ChannelSetAttribute(basschan, BASS_ATTRIB_VOL, 0.5);
+				if (speedup)
+					BASS_ChannelSetAttribute(basschan, BASS_ATTRIB_TEMPO, 25);
 				BASS_ChannelPlay(basschan, true);
-				return true;
+				return -1;
 			}
 		}
 	}
-	return originalPlayMusic(trackID);
-}
-
-HOOK(void, __fastcall, SwapMusicTrack, SigSwapMusicTrack(), const char* filePath, int trackID)
-{
-	if (basschan == 0)
-		originalSwapMusicTrack(filePath, trackID);
-	else if (strstr(filePath, "_F.ogg"))
-		BASS_ChannelSetAttribute(basschan, BASS_ATTRIB_TEMPO, 25);
-	else
-		BASS_ChannelSetAttribute(basschan, BASS_ATTRIB_TEMPO, 0);
+	return originalPlayMusic(name, channel, startpos, looppos, async);
 }
 
 extern "C" __declspec(dllexport) void Init(ModInfo *modInfo)
 {
 	ModLoaderData = modInfo->ModLoader;
 
-	if (ModLoaderData == (void*)1)
+	if (ModLoaderData == (void*)1 /*|| ModLoaderData->MajorVersion < 1 || (ModLoaderData->MajorVersion == 1 && ModLoaderData->MinorVersion < 1)*/)
 	{
 		MessageBoxW(nullptr, L"The installed version of HiteModLoader is too old for OriginsBASS to run,\nplease update the modloader to " ML_VERSION " or newer.", L"OriginsBASS Error", MB_ICONERROR);
 		return;
@@ -250,5 +282,4 @@ extern "C" __declspec(dllexport) void Init(ModInfo *modInfo)
 
 	INSTALL_HOOK(PlayMusic);
 	INSTALL_HOOK(StopMusic);
-	INSTALL_HOOK(SwapMusicTrack);
 }
