@@ -2,5 +2,5 @@
 
 extern bool SigValid;
 
-extern void* SigPlayMusic();
-extern void* SigS3KSetup();
+extern void* SigPlayStream();
+extern void* SigSetChannelAttributes();

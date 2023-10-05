@@ -3,165 +3,49 @@
 #include "Helpers.h"
 #include "SigScan.h"
 #include "IniFile.hpp"
-#include "bass.h"
-#include "bass_fx.h"
-//#include "bass_vgmstream.h"
-
-// Data pointer and array declarations.
-#define DataPointer(type, name, address) \
-	static type &name = *(type *)address
-#define DataArray(type, name, address, len) \
-	static DataArray_t<type, len> name(address)
-
-template<typename T, size_t len>
-struct DataArray_t final
-{
-	typedef T value_type;
-	typedef size_t size_type;
-	typedef ptrdiff_t difference_type;
-	typedef value_type& reference;
-	typedef const value_type& const_reference;
-	typedef value_type* pointer;
-	typedef const value_type* const_pointer;
-	typedef pointer iterator;
-	typedef const_pointer const_iterator;
-	typedef std::reverse_iterator<iterator> reverse_iterator;
-	typedef std::reverse_iterator<const_iterator> const_reverse_iterator;
-
-	DataArray_t() = default; // have to declare default constructor
-	DataArray_t(const DataArray_t&) = delete; // object cannot be copied, prevents accidentally using DataArray in a function call
-	DataArray_t(const DataArray_t&&) = delete; // object cannot be moved
-
-	DataArray_t(intptr_t addr)
-	{
-		this->addr = addr;
-	}
-
-	// Gets the underlying data for the array.
-	constexpr pointer data() const noexcept { return reinterpret_cast<pointer>(addr); }
-	// Gets the underlying data for the array.
-	constexpr const_pointer cdata() const noexcept { return reinterpret_cast<const_pointer>(addr); }
-
-	// Checks if the array is empty (no elements).
-	constexpr bool empty() const noexcept { return len == 0; }
-
-	// Gets the size of the array, in elements.
-	constexpr size_type size() const noexcept { return len; }
-
-	// Gets the maximum size of the array, in elements.
-	constexpr size_type max_size() const noexcept { return len; }
-
-	constexpr pointer operator&() const noexcept { return data(); }
-
-	constexpr operator pointer() const noexcept { return data(); }
-
-	// Gets an item from the array, with bounds checking.
-	constexpr reference at(size_type i)
-	{
-		if (i < len)
-			return data()[i];
-		throw std::out_of_range("Data access out of range.");
-	}
-
-	// Gets an item from the array, with bounds checking.
-	constexpr const_reference at(size_type i) const
-	{
-		if (i < len)
-			return cdata()[i];
-		throw std::out_of_range("Data access out of range.");
-	}
-
-	template<size_type I>
-	// Gets an item from the array, with compile-time bounds checking.
-	constexpr reference get() noexcept
-	{
-		static_assert(I < len, "index is within bounds");
-		return data()[I];
-	}
-
-	template<size_type I>
-	// Gets an item from the array, with compile-time bounds checking.
-	constexpr const_reference get() const noexcept
-	{
-		static_assert(I < len, "index is within bounds");
-		return cdata()[I];
-	}
-
-	// Gets the first item in the array.
-	constexpr reference front() { return *data(); }
-	// Gets the first item in the array.
-	constexpr const_reference front() const { return *cdata(); }
-
-	// Gets the last item in the array.
-	constexpr reference back() { return data()[len - 1]; }
-	// Gets the last item in the array.
-	constexpr const_reference back() const { return cdata()[len - 1]; }
-
-	// Gets an iterator to the beginning of the array.
-	constexpr iterator begin() noexcept { return data(); }
-	// Gets an iterator to the beginning of the array.
-	constexpr const_iterator begin() const noexcept { return cdata(); }
-	// Gets an iterator to the beginning of the array.
-	constexpr const_iterator cbegin() const noexcept { return cdata(); }
-
-	// Gets an iterator to the end of the array.
-	constexpr iterator end() noexcept { return data() + len; }
-	// Gets an iterator to the end of the array.
-	constexpr const_iterator end() const noexcept { return cdata() + len; }
-	// Gets an iterator to the end of the array.
-	constexpr const_iterator cend() const noexcept { return cdata() + len; }
-
-	// Gets a reverse iterator to the beginning of the array.
-	constexpr reverse_iterator rbegin() noexcept { return data() + len; }
-	// Gets a reverse iterator to the beginning of the array.
-	constexpr const_reverse_iterator rbegin() const noexcept { return cdata() + len; }
-	// Gets a reverse iterator to the beginning of the array.
-	constexpr const_reverse_iterator crbegin() const noexcept { return cdata() + len; }
-
-	// Gets a reverse iterator to the end of the array.
-	constexpr reverse_iterator rend() noexcept { return data(); }
-	// Gets a reverse iterator to the end of the array.
-	constexpr const_reverse_iterator rend() const noexcept { return cdata(); }
-	// Gets a reverse iterator to the end of the array.
-	constexpr const_reverse_iterator crend() const noexcept { return cdata(); }
-
-	private:
-		intptr_t addr;
-};
+#include "mod.hpp"
 
 ModLoader* ModLoaderData;
 const char** ModPaths;
 int ModPathCount;
-int basschan = 0;
-char currentmusic[MAX_PATH];
-__int64 loopPoint;
-bool isfast = false;
+Channel Channels[0x10];
 
-HOOK(void, __fastcall, StopMusic, ReadDataPointer((size_t)SigS3KSetup() + 0x899, 3, 7), __int64 channel)
+// Config
+float Volume = 0.5f;
+float BlueSphereTempos[] = { 5.0f, 10.0f, 15.0f, 20.0f };
+
+static void ReleaseStream(uint32 channel)
 {
-	if (basschan != 0)
+	if (channel >= 0x10)
 	{
-		BASS_ChannelStop(basschan);
-		BASS_ChannelFree(basschan);
-		basschan = 0;
-		currentmusic[0] = 0;
+		printf("[OriginsBASS] Attempt to release stream out of bounds. channel = %u \n", channel);
+		return;
 	}
-	else
-		originalStopMusic(channel);
+
+	if (Channels[channel].basschan != 0)
+	{
+		BASS_ChannelStop(Channels[channel].basschan);
+		BASS_StreamFree(Channels[channel].basschan);
+		Channels[channel].basschan = 0;
+	}
 }
 
 static void __stdcall LoopTrack(HSYNC handle, DWORD channel, DWORD data, void* user)
 {
-	BASS_ChannelSetPosition(channel, loopPoint, BASS_POS_BYTE);
+	BASS_ChannelSetPosition(channel, (uint32)user, BASS_POS_BYTE);
 }
 
-HOOK(__int64, __fastcall, PlayMusic, SigPlayMusic(), const char *name, __int64 channel, __int64 startpos, unsigned int looppos, int async)
+HOOK(int32, __fastcall, PlayStream, SigPlayStream(), const char* filename, uint32 slot, uint32 startPos, uint32 loopPoint, bool32 loadASync)
 {
-	if (!name[0])
+	//printf("[OriginsBASS] PlayStream(\"%s\", %u, %u, %u, %u)\n", filename, slot, startPos, loopPoint, loadASync);
+	if (slot >= 0x10)
+	{
 		return -1;
+	}
 
 	bool speedup = false;
-	const char* _name = name;
+	DWORD basschan = Channels[slot].basschan;
+	const char* name = filename;
 	char origname[MAX_PATH];
 	const char* tmp = strstr(name, "_F.ogg");
 	if (tmp)
@@ -169,7 +53,7 @@ HOOK(__int64, __fastcall, PlayMusic, SigPlayMusic(), const char *name, __int64 c
 		strcpy(origname, name);
 		strcpy(origname + (tmp - name), ".ogg");
 		speedup = true;
-		_name = origname;
+		name = origname;
 	}
 	else
 	{
@@ -179,30 +63,41 @@ HOOK(__int64, __fastcall, PlayMusic, SigPlayMusic(), const char *name, __int64 c
 			strcpy(origname, name);
 			strcpy(origname + (tmp - name), tmp + 2);
 			speedup = true;
-			_name = origname;
+			name = origname;
 		}
 	}
 
-	if (!strcmp(currentmusic, _name))
+	// Blue Spheres
+	if (!strcmp(Channels[slot].currentmusic, "3K/SpecialStage.ogg") 
+		&& strstr(filename, "3K/SpecialStageS"))
+	{
+		tmp = strstr(filename, ".ogg");
+		if (tmp)
+		{
+			int stage = *(tmp - 1) - '0';
+			printf("[OriginsBASS] Changing blue sphere tempo to stage %u\n", stage);
+			BASS_ChannelSetAttribute(basschan, BASS_ATTRIB_TEMPO, BlueSphereTempos[stage]);
+			return slot;
+		}
+	}
+
+	if (!strcmp(Channels[slot].currentmusic, name))
 	{
 		if (speedup)
 		{
-			BASS_ChannelSetAttribute(basschan, BASS_ATTRIB_TEMPO, 25);
-			isfast = true;
-			return -1;
+			BASS_ChannelSetAttribute(basschan, BASS_ATTRIB_TEMPO, 20.0f);
+			Channels[slot].isfast = true;
+			return slot;
 		}
-		else if (isfast)
+		else if (Channels[slot].isfast)
 		{
 			BASS_ChannelSetAttribute(basschan, BASS_ATTRIB_TEMPO, 0);
-			isfast = false;
-			return -1;
+			Channels[slot].isfast = false;
+			return slot;
 		}
 	}
-
-	implOfStopMusic(channel);
-	
 	char fnbase[MAX_PATH];
-	snprintf(fnbase, MAX_PATH, "%s\\Data\\Music\\%s", ModLoaderData->GetDataPackName(), _name);
+	snprintf(fnbase, MAX_PATH, "%s\\Data\\Music\\%s", ModLoaderData->GetDataPackName(), name);
 	PathRemoveExtensionA(fnbase);
 	for (tmp = strchr(fnbase, '/'); tmp; tmp = strchr(tmp, '/'))
 		*(char*)tmp = '\\';
@@ -222,42 +117,90 @@ HOOK(__int64, __fastcall, PlayMusic, SigPlayMusic(), const char *name, __int64 c
 		}
 		if (found)
 		{
-			strcpy(currentmusic, _name);
-			loopPoint = looppos;
-			isfast = speedup;
-			char loopfn[MAX_PATH];
-			strncpy(loopfn, fn2, MAX_PATH);
-			PathRemoveFileSpecA(loopfn);
-			PathAppendA(loopfn, "MusicLoops.ini");
-			if (FileExists(loopfn))
-			{
-				IniFile ini(loopfn);
-				loopPoint = ini.getInt("", PathFindFileNameA(fnbase), loopPoint);
-			}
+			ReleaseStream(slot);
+			strcpy(Channels[slot].currentmusic, name);
 			bool useloop = loopPoint != 0;
-			basschan = BASS_StreamCreateFile(false, fn2, 0, 0, BASS_STREAM_DECODE);
+			
+			Channels[slot].basschan = basschan = BASS_StreamCreateFile(false, fn2, 0, 0, BASS_STREAM_DECODE);
 
 			if (basschan != 0)
 			{
-				basschan = BASS_FX_TempoCreate(basschan, (useloop ? BASS_SAMPLE_LOOP : 0) | BASS_FX_FREESOURCE);
+				printf("[OriginsBASS] Playing file stream \"%s\" in channel %u\n", name, slot);
+				Channels[slot].basschan = basschan = BASS_FX_TempoCreate(basschan, (useloop ? BASS_SAMPLE_LOOP : 0) | BASS_FX_FREESOURCE);
 				if (useloop)
-					BASS_ChannelSetSync(basschan, BASS_SYNC_END | BASS_SYNC_MIXTIME, 0, LoopTrack, nullptr);
-				BASS_ChannelSetAttribute(basschan, BASS_ATTRIB_VOL, 0.5);
+					BASS_ChannelSetSync(basschan, BASS_SYNC_END | BASS_SYNC_MIXTIME, 0, LoopTrack, (void*)loopPoint);
+				BASS_ChannelSetAttribute(basschan, BASS_ATTRIB_VOL, Volume);
 				if (speedup)
-					BASS_ChannelSetAttribute(basschan, BASS_ATTRIB_TEMPO, 25);
+					BASS_ChannelSetAttribute(basschan, BASS_ATTRIB_TEMPO, 20.0f);
 				BASS_ChannelPlay(basschan, true);
-				return -1;
+				BASS_ChannelSetPosition(basschan, startPos * 4, BASS_POS_BYTE);
+				return slot;
 			}
 		}
 	}
-	return originalPlayMusic(name, channel, startpos, looppos, async);
+	printf("[OriginsBASS] Failed to load file stream \"%s\"\n", name);
+	// Don't play anything if it fails
+	return -1;
 }
+
+HOOK(void, __fastcall, SetChannelAttributes, SigSetChannelAttributes(), uint8 channel, float volume, float panning, float speed)
+{
+	// Game seems to just keep on using channels, I don't really like buffer overruns
+	if (channel >= 0x10)
+	{
+		return;
+	}
+	
+	// Clamp volume
+	volume = fminf(4.0f, volume);
+	volume = fmaxf(0.0f, volume);
+	
+	printf("[OriginsBASS] Ch: %u, Vol: %f, Tem: %f\n", channel, volume, speed);
+	BASS_ChannelSetAttribute(Channels[channel].basschan, BASS_ATTRIB_VOL, volume * Volume);
+	BASS_ChannelSetAttribute(Channels[channel].basschan, BASS_ATTRIB_PAN, panning);
+	BASS_ChannelSetAttribute(Channels[channel].basschan, BASS_ATTRIB_TEMPO, (speed - 1.0f) * 100.0f);
+}
+
+HOOK(void, __fastcall, StopChannel, 0x1400DDF50, uint32 channel)
+{
+	if (channel >= 0x10)
+	{
+		printf("[OriginsBASS] Attempted to stop channel out of bounds %i\n", channel);
+		return;
+	}
+
+	printf("[OriginsBASS] Closing stream %u\n", channel);
+	ReleaseStream(channel);
+}
+
+HOOK(void, __fastcall, PauseChannel, 0x1400DDE90, uint32 channel)
+{
+	if (channel >= 0x10)
+	{
+		return;
+	}
+
+	printf("[OriginsBASS] Pausing stream %u\n", channel);
+	BASS_ChannelPause(Channels[channel].basschan);
+}
+
+HOOK(void, __fastcall, ResumeChannel, 0x1400DDEE0, uint32 channel)
+{
+	if (channel >= 0x10)
+	{
+		return;
+	}
+
+	printf("[OriginsBASS] Playing stream %u\n", channel);
+	BASS_ChannelPlay(Channels[channel].basschan, false);
+}
+
 
 extern "C" __declspec(dllexport) void Init(ModInfo *modInfo)
 {
 	ModLoaderData = modInfo->ModLoader;
 
-	if (ModLoaderData == (void*)1 /*|| ModLoaderData->MajorVersion < 1 || (ModLoaderData->MajorVersion == 1 && ModLoaderData->MinorVersion < 1)*/)
+	if (ModLoaderData == (void*)1)
 	{
 		MessageBoxW(nullptr, L"The installed version of HiteModLoader is too old for OriginsBASS to run,\nplease update the modloader to " ML_VERSION " or newer.", L"OriginsBASS Error", MB_ICONERROR);
 		return;
@@ -280,6 +223,9 @@ extern "C" __declspec(dllexport) void Init(ModInfo *modInfo)
 	ModPaths = new const char* [ModPathCount];
 	ModLoaderData->GetIncludePaths(ModPaths, ModPathCount);
 
-	INSTALL_HOOK(PlayMusic);
-	INSTALL_HOOK(StopMusic);
+	INSTALL_HOOK(PlayStream);
+	INSTALL_HOOK(SetChannelAttributes);
+	INSTALL_HOOK(StopChannel);
+	INSTALL_HOOK(PauseChannel);
+	INSTALL_HOOK(ResumeChannel);
 }
