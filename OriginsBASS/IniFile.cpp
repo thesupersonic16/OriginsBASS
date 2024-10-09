@@ -1,3 +1,4 @@
+#pragma warning(suppress: 4996)
 /**
  * SADX Mod Loader
  * INI file parser.

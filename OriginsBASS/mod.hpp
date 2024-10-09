@@ -1,14 +1,4 @@
-#include "bass.h"
-#include "bass_fx.h"
-//#include "bass_vgmstream.h"
 
-// Basic types
-typedef int int32;
-typedef int uint32;
-typedef short int16;
-typedef unsigned short uint16;
-typedef unsigned char uint8;
-typedef int bool32;
 
 // Data pointer and array declarations.
 #define DataPointer(type, name, address) \
