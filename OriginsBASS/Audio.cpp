@@ -18,35 +18,33 @@ namespace OriginsBASS {
         }
 
         static void __stdcall EventClearSFX(HSYNC handle, DWORD channel, DWORD data, void* user) {
-            channels[reinterpret_cast<int8>(user)].soundID = -1;
+            channels[reinterpret_cast<uintptr_t>(user) & 0x0F].soundID = -1;
         }
 
         void ResetChannels() {
-            for (int i = 0; i < CHANNEL_COUNT; ++i) {
-                channels[i].basschan = NULL;
-                channels[i].isfast = false;
-                channels[i].soundID = -1;
-                channels[i].state = CHANNEL_IDLE;
-            }
+            for (int i = 0; i < CHANNEL_COUNT; ++i)
+                StopChannel(i);
         }
 
         void StopChannel(uint32 channel) {
             if (channel >= CHANNEL_COUNT) {
-                RSDKTable->PrintLog(PRINT_POPUP, "[OriginsBASS] Attempt to release channel out of bounds. channel = %u", channel);
+                printf("[OriginsBASS] Attempt to release channel out of bounds. channel = %u\n", channel);
                 return;
             }
 
             if (channels[channel].basschan) {
                 BASS_ChannelStop(channels[channel].basschan);
                 BASS_StreamFree(channels[channel].basschan);
-                channels[channel].basschan = 0;
+                channels[channel].basschan = NULL;
+                channels[channel].streamSpeed = 1.0f;
+                channels[channel].soundID = -1;
                 channels[channel].state = CHANNEL_IDLE;
             }
         }
 
         void PauseChannel(uint32 channel) {
             if (channel >= CHANNEL_COUNT) {
-                RSDKTable->PrintLog(PRINT_POPUP, "[OriginsBASS] Attempt to pause channel out of bounds. channel = %u", channel);
+                printf("[OriginsBASS] Attempt to pause channel out of bounds. channel = %u\n", channel);
                 return;
             }
 
@@ -58,7 +56,7 @@ namespace OriginsBASS {
 
         void ResumeChannel(uint32 channel) {
             if (channel >= CHANNEL_COUNT) {
-                RSDKTable->PrintLog(PRINT_POPUP, "[OriginsBASS] Attempt to resume channel out of bounds. channel = %u", channel);
+                printf("[OriginsBASS] Attempt to resume channel out of bounds. channel = %u\n", channel);
                 return;
             }
 
@@ -70,7 +68,7 @@ namespace OriginsBASS {
 
         void PlayChannel(uint32 channel, uint32 startPos) {
             if (channel >= CHANNEL_COUNT) {
-                RSDKTable->PrintLog(PRINT_POPUP, "[OriginsBASS] Attempt to play channel out of bounds. channel = %u", channel);
+                printf("[OriginsBASS] Attempt to play channel out of bounds. channel = %u\n", channel);
                 return;
             }
 
@@ -85,7 +83,7 @@ namespace OriginsBASS {
             if (channel == -1)
                 return;
             if (channel >= CHANNEL_COUNT) {
-                RSDKTable->PrintLog(PRINT_POPUP, "[OriginsBASS] Attempt to set channel attr out of bounds. channel = %u", channel);
+                printf("[OriginsBASS] Attempt to set channel attr out of bounds. channel = %u\n", channel);
                 return;
             }
 
@@ -93,7 +91,7 @@ namespace OriginsBASS {
             volume = fminf(4.0f, volume);
             volume = fmaxf(0.0f, volume);
 
-            RSDKTable->PrintLog(PRINT_NORMAL, "[OriginsBASS] Ch: %u, Vol: %f, Tem: %f", channel, volume, speed);
+            printf("[OriginsBASS] Ch: %u, Vol: %f, Tem: %f\n", channel, volume, speed);
             BASS_ChannelSetAttribute(channels[channel].basschan, BASS_ATTRIB_VOL, volume * globalVolume);
             BASS_ChannelSetAttribute(channels[channel].basschan, BASS_ATTRIB_PAN, panning);
             BASS_ChannelSetAttribute(channels[channel].basschan, BASS_ATTRIB_TEMPO, (speed - 1.0f) * 100.0f);
@@ -101,7 +99,7 @@ namespace OriginsBASS {
 
         void LoadStream(uint32 channel, const char* filename, uint32 loopPoint) {
             if (channel >= CHANNEL_COUNT) {
-                RSDKTable->PrintLog(PRINT_POPUP, "[OriginsBASS] Attempt to load channel out of bounds. channel = %u", channel);
+                printf("[OriginsBASS] Attempt to load channel out of bounds. channel = %u\n", channel);
                 return;
             }
 
@@ -121,6 +119,47 @@ namespace OriginsBASS {
             }
         }
 
+        uint32 GetChannelPos(uint32 channel) {
+            if (channels[channel].basschan) {
+                BASS_CHANNELINFO info;
+                BASS_ChannelGetInfo(channels[channel].basschan, &info);
+                QWORD bytePos = BASS_ChannelGetPosition(channels[channel].basschan, BASS_POS_BYTE);
+                QWORD bps = (QWORD)(((info.origres ? (float)info.origres : 16.0f) / 8.0f) * (float)info.chans);
+                return (uint32)(bytePos / (float)bps);
+            }
+            return 0;
+        }
+        
+        uint32 GetChannelSampleCount(uint32 channel) {
+            if (channels[channel].basschan) {
+                BASS_CHANNELINFO info;
+                BASS_ChannelGetInfo(channels[channel].basschan, &info);
+                QWORD byteCount = BASS_ChannelGetLength(channels[channel].basschan, BASS_POS_BYTE);
+                QWORD bps = (info.origres ? info.origres : 16) * info.chans;
+                return (byteCount / bps) & 0xFFFFFFFF;
+            }
+            return 0;
+        }
+
+        uint8 FindBestChannel() {
+            int8 channel = -1;
+            // Find unused channel
+            for (int8 chan = 0; chan < CHANNEL_COUNT; ++chan)
+                if (channels[chan].state == CHANNEL_IDLE)
+                    return chan;
+
+            // Find SFX channel that is nearing the end
+            uint32 remainingSamplesMin = -1;
+            for (int8 chan = 0; chan < CHANNEL_COUNT; ++chan) {
+                uint32 remaining = GetChannelSampleCount(chan) - GetChannelPos(chan);
+                if (channels[chan].state == CHANNEL_SFX && remaining < remainingSamplesMin) {
+                    remainingSamplesMin = remaining;
+                    channel = chan;
+                }
+            }
+            return channel;
+        }
+
         uint16 FindSFX(const char* name) {
             for (uint32 i = 0; i < SFX_COUNT; ++i) {
                 if (soundFXList[i].scope != SCOPE_NONE && !strcmp(name, soundFXList[i].name))
@@ -129,7 +168,7 @@ namespace OriginsBASS {
             return -1;
         }
 
-        uint16 LoadSFX(const char *filePath, const char *name, uint8 slot, uint8 scope) {
+        uint16 LoadSFX(const char *filePath, const char *name, uint8 slot, uint8 maxConcurrentPlays, uint8 scope) {
             if (slot == 0xFF) {
                 for (uint32 i = 0; i < SFX_COUNT; ++i) {
                     if (soundFXList[i].scope == SCOPE_NONE) {
@@ -140,7 +179,7 @@ namespace OriginsBASS {
             }
 
             if (slot >= SFX_COUNT) {
-                RSDKTable->PrintLog(PRINT_POPUP, "[OriginsBASS] Attempt to load SFX out of bounds. slot = %u", slot);
+                printf("[OriginsBASS] Attempt to load SFX out of bounds. slot = %u\n", slot);
                 return -1;
             }
 
@@ -149,7 +188,7 @@ namespace OriginsBASS {
             if (sfx->buffer)
                 free(sfx->buffer);
 
-            strcpy_s(sfx->name, filePath);
+            strcpy_s(sfx->name, name);
 
             FILE* file;
             fopen_s(&file, filePath, "rb");
@@ -162,6 +201,7 @@ namespace OriginsBASS {
                 fread(sfx->buffer, 1, sfx->bufferLength, file);
                 fclose(file);
                 sfx->scope = scope;
+                sfx->maxConcurrentPlays = maxConcurrentPlays;
             }
 
             return slot;
@@ -169,7 +209,6 @@ namespace OriginsBASS {
 
         void PlaySfx(uint16 sfx, uint32 loopPoint, uint32 priority)
         {
-	        RSDKTable->PrintLog(PRINT_NORMAL, "Playing sfx id %d, with looppoint %d", sfx, loopPoint); //ONLY USE THIS TO DEBUG A SOUND THAT GETS LOADED AND CRASHES. THIS SHOWS THE PLAYING ID WITH THE LOOP.
             if (sfx >= SFX_COUNT || !soundFXList[sfx].scope)
                 return;
 
@@ -181,11 +220,12 @@ namespace OriginsBASS {
                     ++count;
             }
 
-            int8 channel = -1;
-            // Find unused channel
-            for (int32 c = 0; c < CHANNEL_COUNT && channel < 0; ++c)
-                if (channels[c].soundID == -1)
-                    channel = c;
+            if (count >= sfxEntry->maxConcurrentPlays) {
+                // TODO
+                return;
+            }
+
+            int8 channel = FindBestChannel();
 
             if (channel == -1)
                 return;
@@ -199,7 +239,6 @@ namespace OriginsBASS {
 
             if (chan->basschan)
             {
-                RSDKTable->PrintLog(PRINT_NORMAL, "[OriginsBASS] Loaded file stream \"%s\" in channel %u\n", sfxEntry->name, channel);
                 channels[channel].basschan = BASS_FX_TempoCreate(channels[channel].basschan, BASS_FX_FREESOURCE);
                 BASS_ChannelSetSync(channels[channel].basschan, BASS_SYNC_END | BASS_SYNC_MIXTIME, 0, EventClearSFX, reinterpret_cast<void*>(channel));
                 BASS_ChannelSetAttribute(channels[channel].basschan, BASS_ATTRIB_VOL, globalVolume);

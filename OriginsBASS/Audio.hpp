@@ -8,6 +8,7 @@ namespace OriginsBASS {
             void* buffer;
             uint32 bufferLength;
             uint8 scope;
+            uint8 maxConcurrentPlays;
 	    };
 
         struct AudioChannel {
@@ -16,7 +17,7 @@ namespace OriginsBASS {
             uint8 state;
             int16 soundID;
 		    char currentmusic[MAX_PATH];
-		    bool isfast = false;
+		    float streamSpeed;
 	    };
 
 
@@ -34,8 +35,11 @@ namespace OriginsBASS {
         void PlayChannel(uint32 channel, uint32 startPos);
         void SetChannelAttributes(uint32 channel, float volume, float panning, float speed);
         void LoadStream(uint32 channel, const char* filename, uint32 loopPoint);
+        uint32 GetChannelPos(uint32 channel);
+        uint32 GetChannelSampleCount(uint32 channel);
+        uint8 FindBestChannel();
         uint16 FindSFX(const char* name);
-        uint16 LoadSFX(const char* filePath, const char* name, uint8 slot, uint8 scope);
+        uint16 LoadSFX(const char* filePath, const char* name, uint8 slot, uint8 maxConcurrentPlays, uint8 scope);
         void PlaySfx(uint16 sfx, uint32 loopPoint, uint32 priority);
     }// namespace Audio
 } // namespace OriginsBASS

@@ -61,132 +61,129 @@ namespace OriginsBASS {
 		return false;
 	}
 
-	uint16 GetSfx(const char* path) {
+	HOOK(uint16, __fastcall, GetSfx, 0x1400DDDF0, const char* path) {
 		int16 id = Audio::FindSFX(path);
-
-		if (id == -1) {
-			char filePath[MAX_PATH];
-			char basePath[MAX_PATH];
-			sprintf_s(basePath, "%s\\Data\\SoundFX\\%s", ModLoaderData->GetDataPackName(), path);
-		
-			if (FindModFile(filePath, sizeof(filePath), basePath))
-				return Audio::LoadSFX(filePath, path, -1, SCOPE_GLOBAL);
-		}
 		return id;
 	}
 
-	int32 PlaySfx(uint16 sfx, int32 loopPoint, int32 priority) {
+	HOOK(int32, __fastcall, PlaySfx, 0x1400DDEA0, uint16 sfx, int32 loopPoint, int32 priority) {
 		Audio::PlaySfx(sfx, loopPoint, priority);
 		return sfx;
 	}
 
-	int32 PlayStream(const char* filename, uint32 channel, uint32 startPos, uint32 loopPoint, bool32 loadASync) {
-		RSDKTable->PrintLog(PRINT_NORMAL, "[OriginsBASS] PlayStream(\"%s\", %u, %u, %u, %u)", filename, channel, startPos, loopPoint, loadASync);
+	HOOK(int32, __fastcall, PlayStream, 0x1400DDEB0, const char* filename, uint32 channel, uint32 startPos, uint32 loopPoint, bool32 loadASync) {
+		printf("[OriginsBASS] PlayStream(\"%s\", %u, %u, %u, %u)\n", filename, channel, startPos, loopPoint, loadASync);
+
+		// Legacy passes -1
+		if (channel == -1)
+			channel = 0;
+
 		if (channel >= CHANNEL_COUNT)
 			return -1;
 
-		Audio::AudioChannel* chan = &Audio::channels[channel];
-		bool speedup = false;
-		const char* name = filename;
-		char origname[MAX_PATH];
-		const char* tmp = strstr(name, "_F.ogg");
-		if (tmp)
-		{
-			strcpy(origname, name);
-			strcpy(origname + (tmp - name), ".ogg");
-			speedup = true;
-			name = origname;
+		Audio::AudioChannel *channelEntry = &Audio::channels[channel];
+
+		// I aren't rewriting this
+		// Handle speed
+        // The code built in S3K for handling the speed is faulty
+        bool isTransition   = false;
+        std::string path    = std::string("Data/Music/") + filename;
+        bool isFast         = path.find("/F/") != std::string::npos;
+        bool isSpecialStage = path.find("3K/SpecialStage") != std::string::npos;
+        float fastSpeed     = 1.2f;
+
+		if (path.find("/3K/") != std::string::npos) {
+			if (isFast) {
+				path.replace(path.find("/F/"), 3, "/");
+				isTransition = !strcmp(channelEntry->currentmusic, path.c_str());
+			}
+			else {
+				path.replace(path.find("/3K/"), 4, "/3K/F/");
+				isTransition = !strcmp(channelEntry->currentmusic, path.c_str());
+			}
+
+			// Handle blue spheres
+			if (isSpecialStage) {
+				// 1 = S0, 2 = S1, ...
+				int32 speedStage = 0;
+				size_t pos = path.find("StageS");
+				if (isTransition = isFast = (pos != std::string::npos))
+				{
+					int32 speedStep = path.c_str()[pos + 6] - '0' + 1;
+					fastSpeed = speedStep * 0.05f + 1.0f;
+				}
+			}
+
+			if (!isFast && !isTransition)
+				channelEntry->streamSpeed = 1.0f;
+
+			if (isTransition)
+			{
+				float newSpeed = (isFast ? fastSpeed : 1.0f);
+				bool speedChanged = channelEntry->streamSpeed != newSpeed;
+				if (speedChanged)
+				{
+					printf("  Speed change %f -> %f\n", channelEntry->streamSpeed, newSpeed);
+					float ratio = channelEntry->streamSpeed / newSpeed;
+					startPos = (uint32)(Audio::GetChannelPos(channel) * ratio);
+					loopPoint = (uint32)(loopPoint * (1.0f / newSpeed));
+					channelEntry->streamSpeed = newSpeed;
+				}
+			}
+		}
+		char filePath[MAX_PATH];
+		sprintf_s(filePath, "%s\\Data\\Music\\%s", ModLoaderData->GetDataPackName(), filename);
+		
+		if (FindModFile(filePath, sizeof(filePath), filePath)) {
+			Audio::LoadStream(channel, filePath, loopPoint);
+			Audio::PlayChannel(channel, startPos);
 		}
 		else
-		{
-			tmp = strstr(name, "/F/");
-			if (tmp)
-			{
-				strcpy(origname, name);
-				strcpy(origname + (tmp - name), tmp + 2);
-				speedup = true;
-				name = origname;
-			}
-		}
-
-		// Blue Spheres
-		if (!strcmp(chan->currentmusic, "3K/SpecialStage.ogg") 
-			&& strstr(filename, "3K/SpecialStageS"))
-		{
-			tmp = strstr(filename, ".ogg");
-			if (tmp)
-			{
-				int stage = *(tmp - 1) - '0';
-				printf("[OriginsBASS] Changing blue sphere tempo to stage %u\n", stage);
-				BASS_ChannelSetAttribute(chan->basschan, BASS_ATTRIB_TEMPO, BlueSphereTempos[stage]);
-				return channel;
-			}
-		}
-
-		if (!strcmp(chan->currentmusic, name))
-		{
-			if (speedup)
-			{
-				BASS_ChannelSetAttribute(chan->basschan, BASS_ATTRIB_TEMPO, 20.0f);
-				chan->isfast = true;
-				return channel;
-			}
-			else if (chan->isfast)
-			{
-				BASS_ChannelSetAttribute(chan->basschan, BASS_ATTRIB_TEMPO, 0);
-				chan->isfast = false;
-				return channel;
-			}
-		}
-		char fnbase[MAX_PATH];
-		snprintf(fnbase, MAX_PATH, "%s\\Data\\Music\\%s", ModLoaderData->GetDataPackName(), name);
-		PathRemoveExtensionA(fnbase);
-		for (tmp = strchr(fnbase, '/'); tmp; tmp = strchr(tmp, '/'))
-			*(char*)tmp = '\\';
-		for (int i = 0; i < ModPathCount; i++)
-		{
-			bool found = false;
-			char fn2[MAX_PATH];
-			snprintf(fn2, MAX_PATH, "%s\\%s.*", ModPaths[i], fnbase);
-			WIN32_FIND_DATAA finddata;
-			HANDLE hFind = FindFirstFileA(fn2, &finddata);
-			if (hFind != INVALID_HANDLE_VALUE)
-			{
-				found = true;
-				PathRemoveFileSpecA(fn2);
-				PathAppendA(fn2, finddata.cFileName);
-				FindClose(hFind);
-			}
-			if (found)
-			{
-				Audio::LoadStream(channel, fn2, loopPoint);
-				Audio::PlayChannel(channel, startPos);
-				return channel;
-			}
-		}
-		printf("[OriginsBASS] Failed to load file stream \"%s\"\n", name);
-		// Don't play anything if it fails
-		return -1;
+			printf("[OriginsBASS] Failed to load file stream \"%s\"\n", filename);
+		return channelEntry->basschan ? channel : -1;
 	}
-	void SetChannelAttributes(uint8 channel, float volume, float panning, float speed) {
+
+	HOOK(void, __fastcall, SetChannelAttributes, 0x1400DDDB0, uint8 channel, float volume, float panning, float speed) {
 		Audio::SetChannelAttributes(channel, volume, panning, speed);
 	}
-	void StopChannel(uint32 channel) {
+	HOOK(void, __fastcall, StopChannel, 0x1400DDF50, uint32 channel) {
 		Audio::StopChannel(channel);
 	}
-	void PauseChannel(uint32 channel) {
+	HOOK(void, __fastcall, PauseChannel, 0x1400DDE90, uint32 channel) {
 		Audio::PauseChannel(channel);
 	}
-	void ResumeChannel(uint32 channel) {
+	HOOK(void, __fastcall, ResumeChannel, 0x1400DDEE0, uint32 channel) {
 		Audio::ResumeChannel(channel);
 	}
 
-	bool32 ChannelActive(uint32 channel)
-	{
+	bool32 ChannelActive(uint32 channel) {
 		if (channel >= CHANNEL_COUNT)
 			return false;
 		else
 			return (Audio::channels[channel].state & 0x3F) != Audio::CHANNEL_IDLE;
+	}
+	uint32 GetChannelPos(uint32 channel) {
+		return Audio::GetChannelPos(channel);
+	}
+
+	HOOK(void, __fastcall, LoadSfx, 0x1400DDE20, char *filename, uint8 plays, uint8 scope) {
+		char filePath[MAX_PATH];
+		char basePath[MAX_PATH];
+		sprintf_s(basePath, "%s\\Data\\SoundFX\\%s", ModLoaderData->GetDataPackName(), filename);
+		
+		if (FindModFile(filePath, sizeof(filePath), basePath))
+			Audio::LoadSFX(filePath, filename, -1, plays, scope);
+	}
+
+	HOOK(void, __fastcall, LoadSfxLegacy, 0x1400DDE80, char *filename, uint8 slot, uint8 plays, uint8 scope) {
+		char filePath[MAX_PATH];
+		char basePath[MAX_PATH];
+		sprintf_s(basePath, "%s\\Data\\SoundFX\\%s", ModLoaderData->GetDataPackName(), filename);
+		
+		if (FindModFile(filePath, sizeof(filePath), basePath))
+			Audio::LoadSFX(filePath, filename, slot, plays, scope);
+		else
+			printf("[OriginsBASS] Failed to load SFX \"%s\"\n", filename);
 	}
 
 
@@ -194,14 +191,15 @@ namespace OriginsBASS {
 		RSDKTable = info->RSDKTable;
 
 		// Replace functions
-		RSDKTable->GetSfx = GetSfx;
-		RSDKTable->PlaySfx = PlaySfx;
-		RSDKTable->PlayStream = PlayStream;
-        RSDKTable->SetChannelAttributes = SetChannelAttributes;
-        RSDKTable->StopChannel = StopChannel;
-        RSDKTable->PauseChannel = PauseChannel;
-		RSDKTable->ResumeChannel = ResumeChannel;
+		//RSDKTable->GetSfx = GetSfx;
+		//RSDKTable->PlaySfx = PlaySfx;
+		//RSDKTable->PlayStream = PlayStream;
+        //RSDKTable->SetChannelAttributes = SetChannelAttributes;
+        //RSDKTable->StopChannel = StopChannel;
+        //RSDKTable->PauseChannel = PauseChannel;
+		//RSDKTable->ResumeChannel = ResumeChannel;
 		RSDKTable->ChannelActive = ChannelActive;
+		RSDKTable->GetChannelPos = GetChannelPos;
 
 		Audio::ResetChannels();
 
@@ -210,6 +208,17 @@ namespace OriginsBASS {
 
 	extern "C" __declspec(dllexport) void PostInit() {
 		INSTALL_HOOK(LinkGameLogicDLL);
+		INSTALL_HOOK(LoadSfx);
+		INSTALL_HOOK(LoadSfxLegacy);
+
+		INSTALL_HOOK(GetSfx);
+		INSTALL_HOOK(PlaySfx);
+		// StopSfx
+		INSTALL_HOOK(PlayStream);
+		INSTALL_HOOK(SetChannelAttributes);
+		INSTALL_HOOK(StopChannel);
+		INSTALL_HOOK(PauseChannel);
+		INSTALL_HOOK(ResumeChannel);
 	}
 
 	extern "C" __declspec(dllexport) void Init(ModInfo *modInfo)
@@ -231,6 +240,7 @@ namespace OriginsBASS {
 			return;
 		}
 
+		Audio::ResetChannels();
 		ModPathCount = ModLoaderData->GetIncludePaths(nullptr, 0);
 		ModPaths = new const char* [ModPathCount];
 		ModLoaderData->GetIncludePaths(ModPaths, ModPathCount);
