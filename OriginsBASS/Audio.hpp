@@ -13,10 +13,11 @@ namespace OriginsBASS {
 
         struct AudioChannel {
 		    DWORD basschan;
-
+            int32 loopStart;
+            int32 loopEnd;
             uint8 state;
             int16 soundID;
-		    char currentmusic[MAX_PATH];
+		    char name[MAX_PATH];
 		    float streamSpeed;
 	    };
 
@@ -34,7 +35,7 @@ namespace OriginsBASS {
         void ResumeChannel(uint32 channel);
         void PlayChannel(uint32 channel, uint32 startPos);
         void SetChannelAttributes(uint32 channel, float volume, float panning, float speed);
-        void LoadStream(uint32 channel, const char* filename, uint32 loopPoint);
+        void LoadStream(uint32 channel, const char* filename, const char* name, int32 loopStart, int32 loopEnd);
         uint32 GetChannelPos(uint32 channel);
         uint32 GetChannelSampleCount(uint32 channel);
         uint8 FindBestChannel();

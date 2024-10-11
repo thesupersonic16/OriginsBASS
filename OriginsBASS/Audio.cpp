@@ -10,11 +10,12 @@ namespace OriginsBASS {
 
         SoundFX soundFXList[SFX_COUNT];
         AudioChannel channels[CHANNEL_COUNT];
-        float globalVolume = 2.0f;
+        float globalVolume = 1.0f;
 
         // Event
         static void __stdcall EventLoopTrack(HSYNC handle, DWORD channel, DWORD data, void* user) {
-            BASS_ChannelSetPosition(channel, reinterpret_cast<QWORD>(user), BASS_POS_BYTE);
+            AudioChannel* channelEntry = &channels[reinterpret_cast<uintptr_t>(user) & 0x0F];
+            BASS_ChannelSetPosition(channel, channelEntry->loopStart, BASS_POS_BYTE);
         }
 
         static void __stdcall EventClearSFX(HSYNC handle, DWORD channel, DWORD data, void* user) {
@@ -33,6 +34,7 @@ namespace OriginsBASS {
             }
 
             if (channels[channel].basschan) {
+                if (BASS_ChannelIsActive(channels[channel].basschan) != BASS_ACTIVE_STOPPED)
                 BASS_ChannelStop(channels[channel].basschan);
                 BASS_StreamFree(channels[channel].basschan);
                 channels[channel].basschan = NULL;
@@ -97,7 +99,7 @@ namespace OriginsBASS {
             BASS_ChannelSetAttribute(channels[channel].basschan, BASS_ATTRIB_TEMPO, (speed - 1.0f) * 100.0f);
         }
 
-        void LoadStream(uint32 channel, const char* filename, uint32 loopPoint) {
+        void LoadStream(uint32 channel, const char* filename, const char* name, int32 loopStart, int32 loopEnd) {
             if (channel >= CHANNEL_COUNT) {
                 printf("[OriginsBASS] Attempt to load channel out of bounds. channel = %u\n", channel);
                 return;
@@ -106,16 +108,25 @@ namespace OriginsBASS {
             if (channels[channel].basschan)
                 StopChannel(channel);
 
-            channels[channel].basschan = BASS_StreamCreateFile(false, filename, 0, 0, BASS_STREAM_DECODE);
+            //channels[channel].basschan = BASS_VGMSTREAM_StreamCreate(filename, (loopStart ? BASS_SAMPLE_LOOP : 0) | BASS_STREAM_DECODE);
+            //if (!channels[channel].basschan)
+                channels[channel].basschan = BASS_StreamCreateFile(false, filename, 0, 0, (loopStart ? BASS_SAMPLE_LOOP : 0) | BASS_STREAM_DECODE);
 
             if (channels[channel].basschan)
             {
                 printf("[OriginsBASS] Loaded file stream \"%s\" in channel %u\n", filename, channel);
-                channels[channel].basschan = BASS_FX_TempoCreate(channels[channel].basschan, (loopPoint ? BASS_SAMPLE_LOOP : 0) | BASS_FX_FREESOURCE);
-                if (loopPoint)
-                    BASS_ChannelSetSync(channels[channel].basschan, BASS_SYNC_END | BASS_SYNC_MIXTIME, 0, EventLoopTrack, reinterpret_cast<void*>((QWORD)loopPoint));
-                BASS_ChannelSetAttribute(channels[channel].basschan, BASS_ATTRIB_VOL, globalVolume);
                 channels[channel].state = CHANNEL_STREAM;
+                channels[channel].loopStart = BASS_ChannelSeconds2Bytes(channels[channel].basschan, loopStart / 44100.0);
+                channels[channel].loopEnd = BASS_ChannelSeconds2Bytes(channels[channel].basschan, loopEnd / 44100.0);
+                strcpy_s(channels[channel].name, name);
+
+                channels[channel].basschan = BASS_FX_TempoCreate(channels[channel].basschan, (loopStart ? BASS_SAMPLE_LOOP : 0));
+                if (loopStart)
+                    if (loopEnd == -1)
+                         BASS_ChannelSetSync(channels[channel].basschan, BASS_SYNC_END, 0, EventLoopTrack, reinterpret_cast<void*>((QWORD)channel));
+                     else
+                         BASS_ChannelSetSync(channels[channel].basschan, BASS_SYNC_POS, channels[channel].loopEnd, EventLoopTrack, reinterpret_cast<void*>((QWORD)channel));
+                 BASS_ChannelSetAttribute(channels[channel].basschan, BASS_ATTRIB_VOL, globalVolume);
             }
         }
 
@@ -214,14 +225,17 @@ namespace OriginsBASS {
 
             SoundFX* sfxEntry = &soundFXList[sfx];
 
+            uint8 firstChannel = 0;
             uint8 count = 0;
-            for (int32 c = 0; c < CHANNEL_COUNT; ++c) {
-                if (channels[c].soundID == sfx)
+            for (int32 c = CHANNEL_COUNT - 1; c > 0; --c) {
+                if (channels[c].soundID == sfx) {
                     ++count;
+                    firstChannel = c;
+                }
             }
 
             if (count >= sfxEntry->maxConcurrentPlays) {
-                // TODO
+                StopChannel(firstChannel);
                 return;
             }
 

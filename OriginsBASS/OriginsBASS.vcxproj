@@ -63,7 +63,7 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalDependencies>Shlwapi.lib;..\HiteModLoader\HiteModLoader\lib\detours.lib;..\extlib\bass\bass.lib;..\extlib\bass\bass_fx.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Shlwapi.lib;..\HiteModLoader\HiteModLoader\lib\detours.lib;..\extlib\bass\bass.lib;..\extlib\bass\bass_fx.lib;..\extlib\bass\bass_vgmstream.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -86,7 +86,7 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalDependencies>Shlwapi.lib;..\HiteModLoader\HiteModLoader\lib\detours.lib;..\extlib\bass\bass.lib;..\extlib\bass\bass_fx.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Shlwapi.lib;..\HiteModLoader\HiteModLoader\lib\detours.lib;..\extlib\bass\bass.lib;..\extlib\bass\bass_fx.lib;..\extlib\bass\bass_vgmstream.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

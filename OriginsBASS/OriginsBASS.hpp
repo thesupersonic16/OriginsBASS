@@ -1,5 +1,6 @@
 #include "bass.h"
 #include "bass_fx.h"
+#include "bass_vgmstream.h"
 
 #define RETRO_REV0U   1;
 #define RETRO_REV02   1;
